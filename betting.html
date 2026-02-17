@@ -1,0 +1,1488 @@
+
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>⚽ Pro Betting Model</title>
+
+<style>
+body{font-family:Arial;background:#f2f2f2;padding:20px}
+select,input,button{width:100%;font-size:18px;margin:6px 0;padding:10px}
+button{background:#1e88e5;color:white;border:none;border-radius:6px}
+.result{background:white;padding:15px;border-radius:8px;margin-top:15px}
+</style>
+</head>
+
+<body>
+
+<h2>⚽ Auto Betting Model</h2>
+
+<button onclick="loadTodayMatches()">⚡ Find dagens kampe</button>
+
+<div id="fixtures"></div>
+
+Liga:
+<select id="league" onchange="loadTeams()"></select>
+
+Hjemmehold:
+<select id="home"></select>
+
+Udehold:
+<select id="away"></select>
+
+Bookmaker odds:
+<input id="odds" type="number" step="0.01" placeholder="Odds på bedste spil">
+
+<h3>🎯 Custom kombi</h3>
+
+<select id="m1"></select>
+<select id="m2"></select>
+<input id="comboOdds" type="number" step="0.01" placeholder="Odds på kombi">
+
+<button onclick="calcCombo()">Check kombi</button>
+
+<div id="comboOut"></div>
+
+<h3>💾 Hvad vil du gemme?</h3>
+
+<label>
+<input type="radio" name="saveMode" value="auto" checked>
+Robot valg
+</label>
+
+<label>
+<input type="radio" name="saveMode" value="custom">
+Custom kombi
+</label>
+
+<button onclick="calc()">Beregn</button>
+
+<button onclick="saveBet()">💾 Gem spil</button>
+
+<button onclick="exportCSV()">📤 Export CSV</button>
+
+<div class="result" id="out"></div>
+
+<h3>📊 Tracking</h3>
+<table id="log" style="width:100%;background:white;border-collapse:collapse">
+
+<th>Kamp</th>
+<th>Spil</th>
+<th>Odds</th>
+<th>Indsats</th>
+<th>Model %</th>
+<th>Risiko</th>
+<th>EV</th>
+<th>Resultat</th>
+<th>Profit</th>
+<th>Slet</th>
+
+</table>
+
+<div id="totals" style="margin-top:10px;font-weight:bold">
+Total indsats: 0 KR<br>
+Total profit: 0 KR
+</div>
+
+<script>
+
+// ===== API CONFIG =====
+
+const API_KEY = "9e3f71cd272da573cdff436fa6e7762b";
+const API_URL = "https://api.football-data.org/v4";
+
+const league = document.getElementById("league");
+const home = document.getElementById("home");
+const away = document.getElementById("away");
+const out = document.getElementById("out");
+const totals = document.getElementById("totals");
+
+// manglende elements
+const m1 = document.getElementById("m1");
+const m2 = document.getElementById("m2");
+const comboOut = document.getElementById("comboOut");
+
+// ===== LOAD LEAGUES FROM API =====
+async function loadLeagues(){
+
+league.innerHTML = "<option>Loader...</option>";
+
+try{
+
+let res = await fetch(`${API_URL}/competitions`,{
+headers:{ "X-Auth-Token": API_KEY }
+});
+
+let data = await res.json();
+
+league.innerHTML="";
+
+data.competitions.forEach(c=>{
+league.innerHTML += `
+<option value="${c.id}">${c.name}</option>
+`;
+});
+
+}catch(e){
+league.innerHTML="<option>API fejl</option>";
+}
+
+}
+
+// ===== AUTO FIXTURES =====
+
+// hent kampe fra API
+async function getTodayMatches(){
+
+try{
+
+let today = new Date().toISOString().split("T")[0];
+
+let res = await fetch(
+`${API_URL}/matches?dateFrom=${today}&dateTo=${today}`,
+{
+headers:{ "X-Auth-Token": API_KEY }
+}
+);
+
+let data = await res.json();
+
+if(!data.matches) return [];
+
+return data.matches;
+
+}catch(e){
+console.log("Fixture error",e);
+return [];
+}
+
+}
+
+
+// vis kampe på siden
+async function loadTodayMatches(){
+
+let matches = await getTodayMatches();
+
+let box = document.getElementById("fixtures");
+box.innerHTML = "<h3>Dagens kampe</h3>";
+
+if(!matches.length){
+box.innerHTML += "Ingen kampe fundet";
+return;
+}
+
+matches.forEach(m=>{
+box.innerHTML += `
+<div style="background:white;padding:10px;margin:5px 0;border-radius:6px">
+${m.homeTeam.name} vs ${m.awayTeam.name}
+</div>
+`;
+});
+
+}
+
+// ===== TEAM STATS FROM API =====
+async function fetchTeamStats(teamName){
+
+try{
+
+// find team id
+let res = await fetch(`${API_URL}/teams`,{
+headers:{ "X-Auth-Token": API_KEY }
+});
+
+let data = await res.json();
+
+let team = data.teams?.find(t=>t.name===teamName);
+if(!team) return null;
+
+// hent sidste kampe
+let res2 = await fetch(
+`${API_URL}/teams/${team.id}/matches?status=FINISHED&limit=10`,
+{
+headers:{ "X-Auth-Token": API_KEY }
+});
+
+let mdata = await res2.json();
+
+let scored=0;
+let conceded=0;
+let games=0;
+
+mdata.matches.forEach(m=>{
+
+let isHome = m.homeTeam.id===team.id;
+
+let s = isHome ? m.score.fullTime.home : m.score.fullTime.away;
+let c = isHome ? m.score.fullTime.away : m.score.fullTime.home;
+
+if(s!=null && c!=null){
+scored+=s;
+conceded+=c;
+games++;
+}
+
+});
+
+if(games===0) return null;
+
+return {
+a: scored/games,
+d: conceded/games
+};
+
+}catch(e){
+console.log("stats error",e);
+return null;
+}
+
+}
+
+// ===== LEARNING MODE =====
+
+const MIN_LEARNING_BETS = 25; // minimum bets før ROI bruges   // true = lær men blokér ikke
+const ROI_SOFT_LIMIT = -10;   // under -10% = warning
+const ROI_HARD_LIMIT = -25;   // under -25% = stærk warning
+const LEARNING_MODE = true; // slå learning til
+
+// ================= UI =================
+
+let lastPick = null;
+
+// hent dropdown elements
+
+// ===== LOAD TEAMS FROM API =====
+async function loadTeams(){
+
+home.innerHTML="Loader...";
+away.innerHTML="";
+
+try{
+
+let res = await fetch(
+`${API_URL}/competitions/${league.value}/teams`,
+{
+headers:{ "X-Auth-Token": API_KEY }
+});
+
+let data = await res.json();
+
+home.innerHTML="";
+away.innerHTML="";
+
+data.teams.forEach(t=>{
+home.innerHTML += `<option>${t.name}</option>`;
+away.innerHTML += `<option>${t.name}</option>`;
+});
+
+}catch(e){
+home.innerHTML="API fejl";
+}
+
+}
+
+// kombi markets
+let markets=[
+"Hjemmesejr","Uafgjort","Ude sejr",
+
+"1X","X2","12",
+
+"BTTS",
+
+"Over 1.5","Over 2.5","Over 3.5","Over 4.5",
+"Under 2.5","Under 3.5","Under 4.5"
+];
+
+m1.innerHTML="";
+m2.innerHTML="";
+
+markets.forEach(m=>{
+m1.innerHTML+=`<option>${m}</option>`;
+m2.innerHTML+=`<option>${m}</option>`;
+});
+
+}
+
+// ================= POISSON =================
+
+function marketHit(name,hg,ag){
+
+let total = hg+ag;
+
+switch(name){
+
+case "Hjemmesejr": return hg>ag;
+case "Uafgjort": return hg===ag;
+case "Ude sejr": return ag>hg;
+
+case "1X": return hg>=ag;
+case "X2": return ag>=hg;
+case "12": return hg!==ag;
+
+case "Over 1.5": return total>1;
+case "Over 2.5": return total>2;
+case "Over 3.5": return total>3;
+case "Over 4.5": return total>4;
+
+case "Under 2.5": return total<3;
+case "Under 3.5": return total<4;
+case "Under 4.5": return total<5;
+
+case "BTTS": return hg>0 && ag>0;
+}
+
+return false;
+}
+
+function randomPoisson(lambda){
+let L=Math.exp(-lambda);
+let k=0,p=1;
+do{
+k++;
+p*=Math.random();
+}while(p>L);
+return k-1;
+}
+
+
+// ===== KOMBI HELPERS =====
+
+function getLine(name){
+let m = name.match(/(\d\.\d)/);
+return m ? parseFloat(m[1]) : null;
+}
+
+function conflict(a,b){
+
+const dcMarkets = ["1X","X2","12"];
+
+// blokér dobbeltchance + dobbeltchance
+if(dcMarkets.includes(a.name) && dcMarkets.includes(b.name))
+return true;
+
+// over vs under
+if(a.name.includes("Over") && b.name.includes("Under")) return true;
+if(a.name.includes("Under") && b.name.includes("Over")) return true;
+
+// samme type totals
+let aLine = getLine(a.name);
+let bLine = getLine(b.name);
+
+if(aLine && bLine){
+if(a.name.includes("Under") && b.name.includes("Under")) return true;
+if(a.name.includes("Over") && b.name.includes("Over")) return true;
+}
+
+// specifikke konflikter
+if(a.name==="BTTS" && b.name==="Under 2.5") return true;
+if(b.name==="BTTS" && a.name==="Under 2.5") return true;
+
+if(a.name==="BTTS" && b.name==="Over 1.5") return true;
+if(b.name==="BTTS" && a.name==="Over 1.5") return true;
+
+if(a.name==="1X" && b.name==="Hjemmesejr") return true;
+if(b.name==="1X" && a.name==="Hjemmesejr") return true;
+
+if(a.name==="X2" && b.name==="Ude sejr") return true;
+if(b.name==="X2" && a.name==="Ude sejr") return true;
+
+if(a.name==="12" && ["Hjemmesejr","Ude sejr"].includes(b.name)) return true;
+if(b.name==="12" && ["Hjemmesejr","Ude sejr"].includes(a.name)) return true;
+
+return false;
+}
+
+// ================= CALC =================
+
+// ===== SMART PRIORITY ENGINE =====
+
+function marketBias(name){
+
+// dæmp hjemmesejr dominans
+if(name === "Hjemmesejr")
+return 0.88;
+
+// straf dobbeltchance
+if(["1X","X2","12"].includes(name))
+return 0.75;
+
+// straf ultra-safe totals
+if(name==="Under 4.5")
+return 0.70;
+
+return 1;
+}
+
+function zoneScore(p){
+
+// fjern ultra-safe spam
+if(p > 0.85) return 0;
+
+// fjern for risky
+if(p < 0.35) return 0;
+
+// betting sweet spot
+return 1 - Math.abs(p - 0.58);
+}
+
+//
+
+function safeFormBias(homeTeam, awayTeam){
+
+   let bias = 1;
+
+   if(homeTeam?.home?.win)
+       bias += (homeTeam.home.win - 0.5) * 0.15;
+
+   if(awayTeam?.away?.win)
+       bias -= (awayTeam.away.win - 0.5) * 0.10;
+
+   return Math.max(0.85, Math.min(1.15, bias));
+}
+
+function calc(){
+
+// hent API stats først
+Promise.all([
+fetchTeamStats(home.value),
+fetchTeamStats(away.value)
+]).then(([apiHome, apiAway])=>{
+
+let h = apiHome;
+let a = apiAway;
+
+// test API connection
+fetchTeamStats(home.value).then(d=>console.log("Home API:",d));
+fetchTeamStats(away.value).then(d=>console.log("Away API:",d));
+
+if(!h || !a){
+out.innerHTML="⚠ Manglende data";
+return;
+}
+
+if(home.value===away.value){
+out.innerHTML="⚠ Vælg to forskellige hold";
+return;
+}
+
+let expH,expA;
+
+// ===== hjemme/ude model =====
+let useHomeAway =
+h.home && h.total &&
+a.away && a.total;
+
+if(useHomeAway){
+
+expH=((h.home.a+a.away.d)+(h.total.a+a.total.d))/4;
+expA=((a.away.a+h.home.d)+(a.total.a+h.total.d))/4;
+
+}else{
+
+let ha=h.a??h.total?.a??1;
+let hd=h.d??h.total?.d??1;
+let aa=a.a??a.total?.a??1;
+let ad=a.d??a.total?.d??1;
+
+expH=(ha+ad)/2;
+expA=(aa+hd)/2;
+}
+
+expH=Math.max(0.1,expH);
+expA=Math.max(0.1,expA);
+
+// ⭐ form bias
+let bias = safeFormBias(h,a);
+expH *= bias;
+expA /= bias;
+
+// ⭐ stabilisering
+expH=Math.min(expH,4);
+expA=Math.min(expA,4);
+
+// ===== Monte Carlo =====
+const sims=100000;
+
+let hw=0,d=0,aw=0;
+let over15=0,over25=0,over35=0,over45=0,btts=0;
+let scores={};
+
+for(let i=0;i<sims;i++){
+
+let hg=randomPoisson(expH);
+let ag=randomPoisson(expA);
+
+if(hg>ag) hw++;
+else if(hg===ag) d++;
+else aw++;
+
+let total=hg+ag;
+
+if(total>1) over15++;
+if(total>2) over25++;
+if(total>3) over35++;
+if(total>4) over45++;
+
+if(hg&&ag) btts++;
+
+let key=hg+"-"+ag;
+scores[key]=(scores[key]||0)+1;
+}
+
+hw/=sims;
+d/=sims;
+aw/=sims;
+over15/=sims;
+over25/=sims;
+over35/=sims;
+over45/=sims;
+btts/=sims;
+window.lastScores = scores;
+window.lastSims = sims;
+
+// ===== market checker til kombi =====
+
+
+
+let under25=1-over25;
+let under35=1-over35;
+let under45=1-over45;
+
+let dc1x=hw+d;
+let dcx2=aw+d;
+let dc12=hw+aw;
+
+// ===== score =====
+let bestScore="0-0",max=0;
+
+for(let s in scores){
+if(scores[s]>max){
+max=scores[s];
+bestScore=s;
+}
+}
+
+let scoreProb=(max/sims*100).toFixed(1);
+
+// ===== heatmap =====
+let heatHTML="<br><b>Score heatmap:</b><br><table>";
+
+for(let hg=0;hg<=5;hg++){
+heatHTML+="<tr>";
+for(let ag=0;ag<=5;ag++){
+
+let p=(scores[hg+"-"+ag]||0)/sims;
+
+let color="#eee";
+if(p>0.08) color="#4caf50";
+else if(p>0.04) color="#ffc107";
+else if(p>0.02) color="#ff9800";
+
+heatHTML+=`<td style="width:36px;height:36px;text-align:center;background:${color};border:1px solid #999;font-size:12px">
+${hg}-${ag}<br>${(p*100).toFixed(0)}%</td>`;
+}
+heatHTML+="</tr>";
+}
+heatHTML+="</table>";
+
+// ===== markets =====
+let markets=[
+
+{p:hw,name:"Hjemmesejr",type:"main"},
+{p:d,name:"Uafgjort",type:"main"},
+{p:aw,name:"Ude sejr",type:"main"},
+
+{p:over15,name:"Over 1.5",type:"main"},
+{p:over25,name:"Over 2.5",type:"main"},
+{p:over35,name:"Over 3.5",type:"main"},
+{p:over45,name:"Over 4.5",type:"main"},
+
+{p:under25,name:"Under 2.5",type:"main"},
+{p:under35,name:"Under 3.5",type:"main"},
+{p:under45,name:"Under 4.5",type:"main"},
+
+{p:btts,name:"BTTS",type:"main"},
+
+{p:dc1x,name:"1X",type:"dc"},
+{p:dcx2,name:"X2",type:"dc"},
+{p:dc12,name:"12",type:"dc"}
+
+].sort((a,b)=>b.p-a.p);
+
+let mains = markets; // inkluder også dobbeltchance
+
+// ===== smart filter =====
+
+let filtered = mains.filter(m=>{
+
+// ===== AUTO BLACKLIST =====
+if(LEARNING_MODE && window.marketROI){
+
+let roi = window.marketROI[m.name];
+
+// hvis market historisk meget dårlig → ignorer
+if(roi !== undefined && roi < -30) return false;
+
+}
+
+// anti 12 spam
+if(m.name==="12" && m.p > 0.68) return false;
+
+// straf dobbeltchance spam
+if(["1X","X2","12"].includes(m.name) && m.p > 0.75)
+return false;
+
+// hård blok mod ultra-safe spil
+if(m.name==="Under 4.5" && under45 < 0.98) return false;
+
+// over filtre
+if(m.name==="Over 1.5" && over15 < 0.85) return false;
+if(m.name==="Over 2.5" && over25 < 0.52) return false;
+if(m.name==="Over 3.5" && over35 < 0.35) return false;
+
+// under filtre
+if(m.name==="Under 2.5" && under25 < 0.55) return false;
+if(m.name==="Under 3.5" && under35 < 0.65) return false;
+
+// BTTS skal også have tempo
+if(m.name==="BTTS" && (btts < 0.68 || over25 < 0.50)) return false;
+
+// undgå for lave sandsynligheder generelt
+if(m.p < 0.28) return false;
+
+return true;
+});
+
+if(!filtered.length) filtered=mains;
+
+// smartere prioritering — betting zone filter
+
+
+// behold kun markets i zonen
+let zoned = filtered.filter(m => zoneScore(m.p) > 0);
+
+let best;
+
+// hvis vi har gode zone picks → brug dem
+if(zoned.length){
+
+zoned.sort((a,b)=>
+(zoneScore(b.p)*marketBias(b.name)) -
+(zoneScore(a.p)*marketBias(a.name))
+);
+best = zoned[0];
+
+}else{
+
+// fallback = højeste sandsynlighed
+filtered.sort((a,b)=>
+(b.p*marketBias(b.name)) -
+(a.p*marketBias(a.name))
+);
+
+best = filtered[0];
+
+
+}
+
+// ===== odds / EV =====
+
+// ===== SMART KOMBI MOTOR v3 =====
+
+let comboText = "";
+
+let bestSingleScore = zoneScore(best.p) + (best.p * 0.4);
+let bestCombo = null;
+
+// kun stærke singles må kombineres
+let comboPool = markets.filter(m =>
+
+// anti 12 spam også i kombi
+!(m.name==="12" && m.p > 0.65) &&
+
+m.p >= 0.55 &&
+zoneScore(m.p) > 0 &&
+m.p < 0.85
+);
+
+for(let i=0;i<comboPool.length;i++){
+for(let j=i+1;j<comboPool.length;j++){
+
+let A = comboPool[i];
+let B = comboPool[j];
+
+if(conflict(A,B)) continue;
+
+// ⭐ STEP 3 — stop safe + safe kombier
+if(A.p > 0.80 && B.p > 0.80) continue;
+
+// hurtig sanity check
+if(A.p * B.p < 0.25) continue;
+
+// realistisk kombi sandsynlighed
+
+let hits = 0;
+
+for(let s in scores){
+
+let [hg,ag] = s.split("-").map(Number);
+
+if(
+marketHit(A.name,hg,ag) &&
+marketHit(B.name,hg,ag)
+){
+hits += scores[s];
+}
+
+}
+
+let comboP = hits / sims;
+
+let impliedOdds = 1 / comboP;
+
+// blokér kedelige kombier
+if(impliedOdds < 1.70) continue;
+
+// minimum kvalitet
+if(comboP < 0.40) continue;
+
+let z = zoneScore(comboP);
+if(z <= 0) continue;
+
+let comboScore = z * Math.sqrt(impliedOdds);
+
+if(comboScore > bestSingleScore * 1.10){
+
+if(!bestCombo || comboScore > bestCombo.score){
+
+bestCombo = {
+name: A.name + " + " + B.name,
+p: comboP,
+score: comboScore
+};
+
+}
+
+}
+
+}
+}
+
+if(bestCombo){
+
+comboText = `
+<br><b>🔥 Kombi bedre end single:</b><br>
+${bestCombo.name}<br>
+Sandsynlighed: ${(bestCombo.p*100).toFixed(1)}%<br>
+`;
+
+}
+
+let odds=Number(document.getElementById("odds").value)||0;
+
+let activePick = best;
+let activeProb = best.p;
+
+if(bestCombo){
+activePick = bestCombo;
+activeProb = bestCombo.p;
+
+// ROI check også for kombi
+if(LEARNING_MODE && window.marketROI){
+
+let roi = window.marketROI[activePick.name];
+
+if(roi !== undefined){
+if(roi < ROI_SOFT_LIMIT) activeProb *= 0.95;
+if(roi < ROI_HARD_LIMIT) activeProb *= 0.88;
+}
+
+}
+}
+
+let ev = (odds) ? (activeProb*odds-1) : 0;
+
+// ===== LEARNING WARNING =====
+
+let learningNote = "";
+
+if(LEARNING_MODE && window.marketROI){
+
+let roi = window.marketROI[activePick.name];
+
+if(roi !== undefined){
+
+if(roi < ROI_HARD_LIMIT)
+learningNote = "🚨 Learning: historisk meget dårlig performance";
+
+else if(roi < ROI_SOFT_LIMIT)
+learningNote = "⚠ Learning: svag historisk ROI";
+
+}
+}
+
+const softEdge = -0.08;
+
+let verdict;
+let color;
+
+if(ev > 0.05){
+    verdict = "🔥 STRONG VALUE";
+    color = "green";
+}
+else if(ev > 0){
+    verdict = "✅ VALUE";
+    color = "limegreen";
+}
+else if(ev > softEdge){
+    verdict = "🟡 SOFT VALUE";
+    color = "orange";
+}
+else{
+    verdict = "❌ DROP";
+    color = "red";
+}
+
+// ===== risiko =====
+
+let risk="🔴 Høj";
+
+if(activeProb >= 0.52)
+    risk="🟢 Lav";
+else if(activeProb >= 0.42)
+    risk="🟡 Medium";
+else risk="🔴 Høj";
+
+window.lastRisk = risk;
+
+// sorter efter rækkefølge
+
+// ===== tabel =====
+
+// ønsket rækkefølge
+const order = [
+"Hjemmesejr",
+"Uafgjort",
+"Ude sejr",
+
+"1X",
+"X2",
+"12",
+
+"BTTS",
+"Over 1.5","Over 2.5","Over 3.5","Over 4.5",
+"Under 2.5","Under 3.5","Under 4.5"
+];
+
+// sorter markets
+const sortedMarkets = order
+.map(name => mains.find(m => m.name === name))
+.filter(Boolean);
+
+// byg tabel
+let table = `<br><b>📊 Markets</b>
+<table style="width:100%;border-collapse:collapse">
+<tr><th>Market</th><th>%</th><th></th></tr>`;
+
+sortedMarkets.forEach(m=>{
+table += `<tr>
+<td>${m.name}</td>
+<td>${(m.p*100).toFixed(1)}%</td>
+
+<td>${m.name===activePick.name?"🤖":""}</td>
+
+</tr>`;
+});
+
+table += "</table>";
+
+// ===== output =====
+
+lastPick = activePick;
+
+out.innerHTML=`
+
+Forventede mål: ${expH.toFixed(2)} – ${expA.toFixed(2)}<br>
+Score: ${bestScore} (${scoreProb}%)<br><br>
+
+👉 Valgt spil: <b>${activePick.name}</b><br>
+Model: ${(activeProb*100).toFixed(1)}%<br>
+
+EV: ${ev.toFixed(2)}<br>
+Risiko: ${risk}<br>
+<span style="color:${color};font-weight:bold">${verdict}</span>
+${learningNote ? "<br>"+learningNote : ""}
+
+${table}
+${comboText}
+${heatHTML}
+
+`;
+}
+
+const oddsInput=document.getElementById("odds");
+
+// ===== TRACKING SYSTEM =====
+
+function saveBet(){
+
+let mode = document.querySelector('input[name="saveMode"]:checked').value;
+
+let match = home.value+" vs "+away.value;
+let bet;
+let modelP;
+let odds;
+let stake = 100;
+
+// ===== vælg hvad der gemmes =====
+
+if(mode==="custom"){
+
+if(!document.getElementById("comboOdds").value){
+alert("Indtast kombi odds");
+return;
+}
+
+let A=m1.value;
+let B=m2.value;
+
+// ===== conflict check =====
+
+let mockA={name:A};
+let mockB={name:B};
+
+if(conflict(mockA,mockB)){
+comboOut.innerHTML="❌ Konflikt mellem markets — kombi er ikke mulig";
+return;
+}
+
+if(!window.lastScores){
+alert("Beregn kamp først");
+return;
+}
+
+let hits=0;
+
+for(let s in window.lastScores){
+
+let [hg,ag]=s.split("-").map(Number);
+
+if(
+marketHit(A,hg,ag) &&
+marketHit(B,hg,ag)
+){
+hits+=window.lastScores[s];
+}
+
+}
+
+modelP = hits/window.lastSims;
+bet = A+" + "+B;
+odds = parseFloat(document.getElementById("comboOdds").value)||0;
+
+}else{
+
+if(!lastPick){
+alert("Beregn først!");
+return;
+}
+
+bet = lastPick.name;
+modelP = lastPick.p;
+odds = parseFloat(oddsInput.value)||0;
+
+}
+
+// ===== EV / risiko =====
+
+let ev=(odds)?(modelP*odds-1):0;
+
+let risk="🔴 Høj";
+
+if(modelP >= 0.55)
+    risk="🟢 Lav";
+else if(modelP >= 0.48)
+    risk="🟡 Medium";
+
+const softEdge = -0.08;
+
+let verdict;
+
+if(ev > 0.05){
+    verdict = "🔥 STRONG VALUE";
+}
+else if(ev > 0){
+    verdict = "✅ VALUE";
+}
+else if(ev > softEdge){
+    verdict = "🟡 SOFT VALUE";
+}
+else{
+    verdict = "❌ DROP";
+}
+
+// ===== tabel =====
+
+let table=document.getElementById("log");
+
+// dublet check
+for(let i=1;i<table.rows.length;i++){
+let r=table.rows[i];
+if(r.cells[0].innerText===match && r.cells[1].innerText===bet){
+alert("Spil allerede gemt");
+return;
+}
+}
+
+let row=table.insertRow();
+
+row.insertCell(0).innerText=match;
+row.insertCell(1).innerText=bet;
+row.insertCell(2).innerText=odds||"-";
+row.insertCell(3).innerText=stake;
+row.insertCell(4).innerText=(modelP*100).toFixed(1)+"%";
+row.insertCell(5).innerText=risk;
+row.insertCell(6).innerText=verdict;
+
+// result
+let res=row.insertCell(7);
+
+let win=document.createElement("button");
+win.innerText="Win";
+
+let loss=document.createElement("button");
+loss.innerText="Loss";
+
+res.appendChild(win);
+res.appendChild(loss);
+
+// profit
+let profit=row.insertCell(8);
+profit.innerText="-";
+
+// delete
+let del=row.insertCell(9);
+del.innerHTML="🗑";
+
+win.onclick=()=>{
+let p=odds*stake-stake;
+profit.innerText=p.toFixed(2);
+profit.style.color="green";
+row.dataset.result="win";
+updateTotals();
+saveStorage();
+};
+
+loss.onclick=()=>{
+profit.innerText=(-stake).toFixed(2);
+profit.style.color="red";
+row.dataset.result="loss";
+updateTotals();
+saveStorage();
+};
+
+del.onclick=()=>{
+row.remove();
+updateTotals();
+saveStorage();
+};
+
+updateTotals();
+saveStorage();
+}
+
+// ===== TOTALS =====
+
+function updateTotals(){
+
+let table=document.getElementById("log");
+
+let stake=0;
+let profit=0;
+
+for(let i=1;i<table.rows.length;i++){
+
+// kun afsluttede bets til ROI
+if(!table.rows[i].dataset.result) continue;
+
+stake+=parseFloat(table.rows[i].cells[3].innerText)||0;
+profit+=parseFloat(table.rows[i].cells[8].innerText)||0;
+}
+
+let roi = stake>0 ? (profit/stake*100) : 0;
+
+totals.innerHTML=
+"Total indsats: "+stake.toFixed(2)+" KR<br>"+
+"Total profit: "+profit.toFixed(2)+" KR<br>"+
+"ROI: "+roi.toFixed(1)+"%";
+
+marketStats();
+calibrationStats();
+}
+
+// ===== STORAGE =====
+
+function saveStorage(){
+
+let table=document.getElementById("log");
+let data=[];
+
+for(let i=1;i<table.rows.length;i++){
+
+let r=table.rows[i];
+
+let resultState = r.dataset.result || "";
+
+let row=[];
+
+for(let j=0;j<9;j++){
+row.push(r.cells[j].innerText);
+}
+
+row.push(resultState);
+
+data.push(row);
+}
+
+localStorage.setItem("betLog",JSON.stringify(data));
+}
+
+function loadStorage(){
+
+let saved=localStorage.getItem("betLog");
+if(!saved) return;
+
+let data=JSON.parse(saved);
+let table=document.getElementById("log");
+
+data.forEach(d=>{
+
+let row=table.insertRow();
+
+for(let i=0;i<7;i++){
+row.insertCell().innerText=d[i];
+}
+
+let res=row.insertCell(7);
+
+let win=document.createElement("button");
+win.innerText="Win";
+
+let loss=document.createElement("button");
+loss.innerText="Loss";
+
+res.appendChild(win);
+res.appendChild(loss);
+
+let profit=row.insertCell(8);
+profit.innerText=d[8];
+
+let del=row.insertCell(9);
+del.innerHTML="🗑";
+
+let odds=parseFloat(row.cells[2].innerText)||0;
+let stake=parseFloat(row.cells[3].innerText)||100;
+
+row.dataset.result=d[9]||"";
+
+if(row.dataset.result==="win"){
+let p=odds*stake-stake;
+profit.innerText=p.toFixed(2);
+profit.style.color="green";
+}
+
+if(row.dataset.result==="loss"){
+profit.innerText=(-stake).toFixed(2);
+profit.style.color="red";
+}
+
+win.onclick=()=>{
+let p=odds*stake-stake;
+
+profit.innerText=p.toFixed(2);
+profit.style.color="green";
+
+row.dataset.result="win";
+
+updateTotals();
+saveStorage();
+};
+
+loss.onclick=()=>{
+profit.innerText=(-stake).toFixed(2);
+profit.style.color="red";
+
+row.dataset.result="loss";
+
+updateTotals();
+saveStorage();
+};
+
+del.onclick=()=>{
+row.remove();
+updateTotals();
+saveStorage();
+};
+
+});
+
+updateTotals();
+}
+
+// ===== CSV EXPORT =====
+
+function exportCSV(){
+
+let table=document.getElementById("log");
+
+if(table.rows.length<=1){
+alert("Ingen data");
+return;
+}
+
+let csv=[];
+
+for(let i=0;i<table.rows.length;i++){
+
+let cols=table.rows[i].cells;
+let row=[];
+
+for(let j=0;j<9;j++){
+row.push(cols[j].innerText);
+}
+
+csv.push(row.join(","));
+}
+
+let blob=new Blob([csv.join("\n")]);
+let url=URL.createObjectURL(blob);
+
+let a=document.createElement("a");
+a.href=url;
+a.download="tracking.csv";
+a.click();
+
+URL.revokeObjectURL(url);
+}
+
+function calcCombo(){
+
+let A=m1.value;
+let B=m2.value;
+
+// dublet check først
+if(A===B){
+comboOut.innerHTML="⚠ Vælg to forskellige markets";
+return;
+}
+
+// conflict check
+if(conflict({name:A},{name:B})){
+comboOut.innerHTML="❌ Konflikt mellem markets — kombi er ikke mulig";
+return;
+}
+
+if(!window.lastScores){
+comboOut.innerHTML="⚠ Beregn kamp først";
+return;
+}
+
+let hits=0;
+
+for(let s in window.lastScores){
+
+let [hg,ag]=s.split("-").map(Number);
+
+if(
+marketHit(A,hg,ag) &&
+marketHit(B,hg,ag)
+){
+hits+=window.lastScores[s];
+}
+
+}
+
+let modelP = hits/window.lastSims;
+
+let odds = parseFloat(document.getElementById("comboOdds").value)||0;
+
+let text = `
+🔥 Kombi: ${A} + ${B}<br>
+Model: ${(modelP*100).toFixed(1)}%<br>
+`;
+
+if(odds>0){
+
+let bookie = 1/odds;
+let edge = modelP - bookie;
+
+const softEdge = -0.08;
+
+let verdict;
+let color;
+
+if(edge > 0.05){
+    verdict = "🔥 STRONG VALUE";
+    color = "green";
+}
+else if(edge > 0){
+    verdict = "✅ VALUE";
+    color = "limegreen";
+}
+else if(edge > softEdge){
+    verdict = "🟡 SOFT VALUE";
+    color = "orange";
+}
+else{
+    verdict = "❌ DROP";
+    color = "red";
+}
+
+text+=`
+Odds: ${odds}<br>
+Bookie krav: ${(bookie*100).toFixed(1)}%<br>
+Edge: ${(edge*100).toFixed(1)}%<br>
+<span style="color:${color};font-weight:bold">${verdict}</span>
+`;
+
+}
+
+comboOut.innerHTML=text;
+}
+
+// ===== MARKET ROI STATS =====
+
+function marketStats(){
+
+let table=document.getElementById("log");
+window.marketROI = {};
+let markets={};
+let html="<br><b>📊 Market performance</b><br>";
+
+// ===== samle data =====
+for(let i=1;i<table.rows.length;i++){
+
+// skip bets uden resultat
+if(!table.rows[i].dataset.result) continue;
+
+let bet=table.rows[i].cells[1].innerText;
+let stake=parseFloat(table.rows[i].cells[3].innerText)||0;
+let profit=parseFloat(table.rows[i].cells[8].innerText)||0;
+
+if(!markets[bet])
+markets[bet]={stake:0,profit:0,bets:0};
+
+markets[bet].stake+=stake;
+markets[bet].profit+=profit;
+markets[bet].bets++;
+}
+
+// ===== beregn ROI efter loop =====
+for(let m in markets){
+
+let roi=(markets[m].profit/markets[m].stake*100)||0;
+
+if(markets[m].bets >= MIN_LEARNING_BETS)
+window.marketROI[m] = roi;
+
+let color="black";
+if(roi>5) color="green";
+else if(roi<0) color="red";
+
+html+=`<span style="color:${color}">
+${m} → ROI ${roi.toFixed(1)}% (${markets[m].bets} bets)
+</span><br>`;
+}
+
+totals.innerHTML+=html;
+}
+
+// ===== MODEL CALIBRATION =====
+
+function calibrationStats(){
+
+let table=document.getElementById("log");
+
+// bins i 5% intervaller
+let bins={
+"0-45":{bets:0,wins:0},
+"45-50":{bets:0,wins:0},
+"50-55":{bets:0,wins:0},
+"55-60":{bets:0,wins:0},
+"60-65":{bets:0,wins:0},
+"65-70":{bets:0,wins:0},
+"70-75":{bets:0,wins:0},
+"75+":{bets:0,wins:0}
+};
+
+for(let i=1;i<table.rows.length;i++){
+
+let row=table.rows[i];
+
+// skip åbne bets
+if(!row.dataset.result) continue;
+
+let modelText=row.cells[4].innerText.replace("%","");
+let modelP=parseFloat(modelText);
+
+if(isNaN(modelP)) continue;
+
+let result=row.dataset.result==="win";
+
+let bin;
+
+if(modelP<45) bin="0-45";
+else if(modelP<50) bin="45-50";
+else if(modelP<55) bin="50-55";
+else if(modelP<60) bin="55-60";
+else if(modelP<65) bin="60-65";
+else if(modelP<70) bin="65-70";
+else if(modelP<75) bin="70-75";
+else bin="75+";
+
+bins[bin].bets++;
+if(result) bins[bin].wins++;
+}
+
+// build output
+let html="<br><b>🎯 Model Calibration</b><br>";
+
+for(let b in bins){
+
+if(bins[b].bets===0) continue;
+
+let winrate=(bins[b].wins/bins[b].bets*100);
+let color="black";
+
+if(winrate > parseInt(b.split("-")[0]||75)) color="green";
+else color="red";
+
+html+=`
+<span style="color:${color}">
+${b}% → ${(winrate).toFixed(1)}% winrate
+(${bins[b].bets} bets)
+</span><br>
+`;
+}
+
+totals.innerHTML+=html;
+}
+
+// init app
+window.onload = async () => {
+    await loadLeagues();
+
+    // auto vælg første liga og load hold
+    if(league.options.length > 0){
+        league.selectedIndex = 0;
+        loadTeams();
+    }
+
+    loadStorage();
+};
+
+</script>
+</body>
+</html>
