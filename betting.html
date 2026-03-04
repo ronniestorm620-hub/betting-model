@@ -1,0 +1,1159 @@
+
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>⚽ Pro Betting Model</title>
+
+<style>
+body{font-family:Arial;background:#f2f2f2;padding:20px}
+select,input,button{width:100%;font-size:18px;margin:6px 0;padding:10px}
+button{background:#1e88e5;color:white;border:none;border-radius:6px}
+.result{background:white;padding:15px;border-radius:8px;margin-top:15px}
+</style>
+</head>
+
+<body>
+
+<h2>⚽ Auto Betting Model</h2>
+
+Liga:
+<select id="league" onchange="loadTeams()"></select>
+
+Hjemmehold:
+<select id="home"></select>
+
+Udehold:
+<select id="away"></select>
+
+Bookmaker odds:
+<input id="odds" type="number" step="0.01" placeholder="Odds på bedste spil">
+
+<button onclick="calc()">Beregn</button>
+
+<button onclick="saveBet()">💾 Gem spil</button>
+
+<button onclick="exportCSV()">📤 Export CSV</button>
+
+<div class="result" id="out"></div>
+
+<h3>📊 Tracking</h3>
+<table id="log" style="width:100%;background:white;border-collapse:collapse">
+
+<tr>
+<th>Kamp</th>
+<th>Spil</th>
+<th>Odds</th>
+<th>Indsats</th>
+<th>Model %</th>
+<th>Resultat</th>
+<th>Profit</th>
+<th>Slet</th>
+</tr>
+
+</table>
+
+<div id="totals" style="margin-top:10px;font-weight:bold">
+Total indsats: 0 KR<br>
+Total profit: 0 KR
+</div>
+
+<script>
+
+// ================= DATABASE =================
+
+const db = {
+
+"Superliga":{
+"AGF":{a:36/18,d:18/18},
+"Midtjylland":{a:48/18,d:21/18},
+"Brøndby":{a:31/18,d:21/18},
+"Sønderjyske":{a:30/18,d:25/18},
+"FCK":{a:30/18,d:26/18},
+"OB":{a:32/18,d:37/18},
+"Viborg":{a:31/18,d:29/18},
+"Nordsjælland":{a:29/18,d:32/18},
+"Randers":{a:17/18,d:24/18},
+"Silkeborg":{a:22/18,d:36/18},
+"Fredericia":{a:22/18,d:44/18},
+"Vejle":{a:20/18,d:35/18}
+},
+
+"Premier League":{
+
+"Arsenal":{
+home:{a:31/13,d:8/13},
+away:{a:18/12,d:9/12},
+total:{a:49/25,d:17/25}
+},
+
+"Manchester City":{
+home:{a:29/12,d:8/12},
+away:{a:22/13,d:16/13},
+total:{a:51/25,d:24/25}
+},
+
+"Aston Villa":{
+home:{a:18/12,d:10/12},
+away:{a:18/13,d:17/13},
+total:{a:36/25,d:27/25}
+},
+
+"Manchester Utd":{
+home:{a:25/13,d:15/13},
+away:{a:21/12,d:21/12},
+total:{a:46/25,d:36/25}
+},
+
+"Chelsea":{
+home:{a:20/12,d:13/12},
+away:{a:25/13,d:15/13},
+total:{a:45/25,d:28/25}
+},
+
+"Liverpool":{
+home:{a:21/13,d:14/13},
+away:{a:19/12,d:21/12},
+total:{a:40/25,d:35/25}
+},
+
+"Brentford":{
+home:{a:23/12,d:12/12},
+away:{a:16/13,d:22/13},
+total:{a:39/25,d:34/25}
+},
+
+"Everton":{
+home:{a:13/13,d:12/13},
+away:{a:15/12,d:16/12},
+total:{a:28/25,d:28/25}
+},
+
+"Sunderland":{
+home:{a:21/12,d:9/12},
+away:{a:6/13,d:20/13},
+total:{a:27/25,d:29/25}
+},
+
+"Fulham":{
+home:{a:22/13,d:16/13},
+away:{a:13/12,d:21/12},
+total:{a:35/25,d:37/25}
+},
+
+"Bournemouth":{
+home:{a:20/13,d:14/13},
+away:{a:21/12,d:30/12},
+total:{a:41/25,d:44/25}
+},
+
+"Newcastle":{
+home:{a:24/13,d:20/13},
+away:{a:11/12,d:16/12},
+total:{a:35/25,d:36/25}
+},
+
+"Crystal Palace":{
+home:{a:15/13,d:14/13},
+away:{a:11/12,d:15/12},
+total:{a:26/25,d:29/25}
+},
+
+"Brighton":{
+home:{a:20/13,d:14/13},
+away:{a:14/12,d:19/12},
+total:{a:34/25,d:33/25}
+},
+
+"Tottenham":{
+home:{a:15/12,d:16/12},
+away:{a:20/13,d:19/13},
+total:{a:35/25,d:35/25}
+},
+
+"Leeds":{
+home:{a:22/13,d:18/13},
+away:{a:12/12,d:25/12},
+total:{a:34/25,d:43/25}
+},
+
+"Nottingham":{
+home:{a:13/12,d:18/12},
+away:{a:12/13,d:20/13},
+total:{a:25/25,d:38/25}
+},
+
+"West Ham":{
+home:{a:16/12,d:26/12},
+away:{a:15/13,d:22/13},
+total:{a:31/25,d:48/25}
+},
+
+"Burnley":{
+home:{a:12/13,d:19/13},
+away:{a:13/12,d:30/12},
+total:{a:25/25,d:49/25}
+},
+
+"Wolves":{
+home:{a:11/13,d:28/13},
+away:{a:5/12,d:20/12},
+total:{a:16/25,d:48/25}
+}
+
+},
+
+"Championship":{
+
+"Coventry":{home:{a:31/15,d:11/15},away:{a:32/16,d:24/16},total:{a:63/31,d:35/31}},
+"Ipswich":{home:{a:30/16,d:12/16},away:{a:21/14,d:17/14},total:{a:51/30,d:29/30}},
+"Middlesbrough":{home:{a:25/15,d:11/15},away:{a:24/16,d:19/16},total:{a:49/31,d:30/31}},
+"Birmingham":{home:{a:30/15,d:15/15},away:{a:13/16,d:24/16},total:{a:43/31,d:39/31}},
+"Millwall":{home:{a:22/16,d:18/16},away:{a:17/15,d:18/15},total:{a:39/31,d:36/31}},
+"Watford":{home:{a:24/16,d:17/16},away:{a:15/15,d:19/15},total:{a:39/31,d:36/31}},
+"Swansea":{home:{a:24/16,d:18/16},away:{a:14/15,d:19/15},total:{a:38/31,d:37/31}},
+"Hull":{home:{a:23/16,d:23/16},away:{a:27/15,d:20/15},total:{a:50/31,d:43/31}},
+"QPR":{home:{a:28/15,d:21/15},away:{a:14/16,d:22/16},total:{a:42/31,d:43/31}},
+"Southampton":{home:{a:20/15,d:13/15},away:{a:24/16,d:28/16},total:{a:44/31,d:41/31}},
+"Preston":{home:{a:20/16,d:16/16},away:{a:18/15,d:18/15},total:{a:38/31,d:34/31}},
+"Bristol City":{home:{a:25/16,d:20/16},away:{a:18/15,d:18/15},total:{a:43/31,d:38/31}},
+"Wrexham":{home:{a:26/16,d:24/16},away:{a:18/15,d:15/15},total:{a:44/31,d:39/31}},
+"Sheffield Utd":{home:{a:25/15,d:17/15},away:{a:19/16,d:28/16},total:{a:44/31,d:45/31}},
+"West Brom":{home:{a:18/15,d:19/15},away:{a:14/16,d:28/16},total:{a:32/31,d:47/31}},
+"Portsmouth":{home:{a:18/15,d:15/15},away:{a:9/14,d:23/14},total:{a:27/29,d:38/29}},
+"Leicester":{home:{a:20/15,d:19/15},away:{a:21/16,d:28/16},total:{a:41/31,d:47/31}},
+"Charlton":{home:{a:15/14,d:14/14},away:{a:14/16,d:24/16},total:{a:29/30,d:38/30}},
+"Stoke":{home:{a:19/15,d:14/15},away:{a:15/16,d:14/16},total:{a:34/31,d:28/31}},
+"Derby":{home:{a:19/16,d:23/16},away:{a:26/15,d:16/15},total:{a:45/31,d:39/31}},
+"Norwich":{home:{a:16/15,d:20/15},away:{a:23/16,d:22/16},total:{a:39/31,d:42/31}},
+"Oxford Utd":{home:{a:13/15,d:19/15},away:{a:15/16,d:22/16},total:{a:28/31,d:41/31}},
+"Blackburn":{home:{a:15/16,d:22/16},away:{a:12/15,d:18/15},total:{a:27/31,d:40/31}},
+"Sheffield Wed":{home:{a:7/16,d:33/16},away:{a:11/15,d:29/15},total:{a:18/31,d:62/31}}
+
+},
+
+"League One":{
+
+"Cardiff":{
+home:{a:20/15,d:13/15},
+away:{a:35/15,d:16/15},
+total:{a:55/30,d:29/30}
+},
+
+"Lincoln":{
+home:{a:21/15,d:16/15},
+away:{a:31/15,d:14/15},
+total:{a:52/30,d:30/30}
+},
+
+"Bolton":{
+home:{a:12/15,d:18/15},
+away:{a:29/16,d:11/16},
+total:{a:41/31,d:29/31}
+},
+
+"Stockport":{
+home:{a:20/14,d:16/14},
+away:{a:22/16,d:19/16},
+total:{a:42/30,d:35/30}
+},
+
+"Huddersfield":{
+home:{a:22/15,d:27/15},
+away:{a:31/16,d:15/16},
+total:{a:53/31,d:42/31}
+},
+
+"Bradford City":{
+home:{a:15/15,d:21/15},
+away:{a:22/14,d:12/14},
+total:{a:37/29,d:33/29}
+},
+
+"Luton":{
+home:{a:16/14,d:21/14},
+away:{a:24/16,d:14/16},
+total:{a:40/30,d:35/30}
+},
+
+"Wycombe":{
+home:{a:10/14,d:16/14},
+away:{a:30/16,d:15/16},
+total:{a:40/30,d:31/30}
+},
+
+"Stevenage":{
+home:{a:17/16,d:23/16},
+away:{a:14/13,d:7/13},
+total:{a:31/29,d:30/29}
+},
+
+"Peterborough":{
+home:{a:16/14,d:21/14},
+away:{a:27/16,d:19/16},
+total:{a:43/30,d:40/30}
+},
+
+"Reading":{
+home:{a:21/14,d:22/14},
+away:{a:20/15,d:16/15},
+total:{a:41/29,d:38/29}
+},
+
+"Mansfield":{
+home:{a:15/14,d:18/14},
+away:{a:36/28,d:30/28},
+total:{a:36/28,d:30/28}
+},
+
+"Exeter":{
+home:{a:13/16,d:18/16},
+away:{a:33/29,d:30/29},
+total:{a:33/29,d:30/29}
+},
+
+"Wimbledon":{
+home:{a:19/15,d:26/15},
+away:{a:32/29,d:38/29},
+total:{a:32/29,d:38/29}
+},
+
+"Barnsley":{
+home:{a:17/14,d:26/14},
+away:{a:44/27,d:46/27},
+total:{a:44/27,d:46/27}
+},
+
+"Plymouth":{
+home:{a:20/14,d:22/14},
+away:{a:37/30,d:46/30},
+total:{a:37/30,d:46/30}
+},
+
+"Blackpool":{
+home:{a:13/15,d:23/15},
+away:{a:37/30,d:44/30},
+total:{a:37/30,d:44/30}
+},
+
+"Leyton Orient":{
+home:{a:23/15,d:17/15},
+away:{a:40/30,d:49/30},
+total:{a:40/30,d:49/30}
+},
+
+"Northampton":{
+home:{a:12/15,d:24/15},
+away:{a:29/30,d:39/30},
+total:{a:29/30,d:39/30}
+},
+
+"Doncaster":{
+home:{a:13/16,d:29/16},
+away:{a:33/30,d:50/30},
+total:{a:33/30,d:50/30}
+},
+
+"Wigan":{
+home:{a:18/16,d:30/16},
+away:{a:30/29,d:40/29},
+total:{a:30/29,d:40/29}
+},
+
+"Burton":{
+home:{a:16/15,d:23/15},
+away:{a:33/30,d:45/30},
+total:{a:33/30,d:45/30}
+},
+
+"Rotherham":{
+home:{a:13/14,d:21/14},
+away:{a:31/29,d:43/29},
+total:{a:31/29,d:43/29}
+},
+
+"Port Vale":{
+home:{a:9/14,d:21/14},
+away:{a:22/28,d:40/28},
+total:{a:22/28,d:40/28}
+
+} 
+
+},   //
+
+// ---------- Serie B ----------
+
+"Serie B":{
+
+"Venezia":{
+total:{a:46/23,d:20/23},
+home:{a:25/11,d:6/11},
+away:{a:21/12,d:14/12}
+},
+
+"Monza":{
+total:{a:36/23,d:19/23},
+home:{a:21/12,d:8/12},
+away:{a:15/11,d:11/11}
+},
+
+"Palermo":{
+total:{a:36/23,d:16/23},
+home:{a:21/12,d:7/12},
+away:{a:15/11,d:9/11}
+},
+
+"Juve Stabia":{
+total:{a:27/23,d:26/23},
+home:{a:16/12,d:8/12},
+away:{a:11/11,d:18/11}
+},
+
+"Frosinone":{
+total:{a:41/23,d:21/23},
+home:{a:22/11,d:9/11},
+away:{a:19/12,d:12/12}
+},
+
+"Catanzaro":{
+total:{a:30/23,d:26/23},
+home:{a:18/12,d:11/12},
+away:{a:12/11,d:15/11}
+},
+
+"Carrarese":{
+total:{a:31/23,d:32/23},
+home:{a:16/12,d:9/12},
+away:{a:15/11,d:23/11}
+},
+
+"Modena":{
+total:{a:29/23,d:19/23},
+home:{a:17/12,d:11/12},
+away:{a:12/11,d:8/11}
+},
+
+"Cesena":{
+total:{a:31/23,d:27/23},
+home:{a:16/11,d:11/11},
+away:{a:15/12,d:16/12}
+},
+
+"Entella":{
+total:{a:20/23,d:30/23},
+home:{a:13/11,d:9/11},
+away:{a:7/12,d:21/12}
+},
+
+"Sampdoria":{
+total:{a:23/23,d:29/23},
+home:{a:14/11,d:11/11},
+away:{a:9/12,d:18/12}
+},
+
+"Avellino":{
+total:{a:28/23,d:37/23},
+home:{a:17/11,d:18/11},
+away:{a:11/12,d:19/12}
+},
+
+"Sudtirol":{
+total:{a:24/23,d:23/23},
+home:{a:15/11,d:11/11},
+away:{a:9/12,d:12/12}
+},
+
+"Empoli":{
+total:{a:28/23,d:31/23},
+home:{a:17/12,d:12/12},
+away:{a:11/11,d:19/11}
+},
+
+"Mantova":{
+total:{a:24/23,d:37/23},
+home:{a:16/12,d:23/12},
+away:{a:8/11,d:14/11}
+},
+
+"Reggiana":{
+total:{a:25/23,d:34/23},
+home:{a:14/11,d:14/11},
+away:{a:11/12,d:20/12}
+},
+
+"Spezia":{
+total:{a:20/23,d:30/23},
+home:{a:10/12,d:15/12},
+away:{a:10/11,d:15/11}
+},
+
+"Bari":{
+total:{a:19/23,d:36/23},
+home:{a:11/11,d:14/11},
+away:{a:8/12,d:22/12}
+},
+
+"Padova":{
+total:{a:24/23,d:30/23},
+home:{a:11/12,d:15/12},
+away:{a:13/11,d:15/11}
+},
+
+"Pescara":{
+total:{a:27/23,d:46/23},
+home:{a:16/12,d:19/12},
+away:{a:11/11,d:27/11}
+}
+
+}   // 
+
+};  // 
+
+// ================= UI =================
+
+let lastPick = null;
+function loadLeagues(){
+league.innerHTML="";
+for(let l in db){
+league.innerHTML+=`<option>${l}</option>`;
+}
+}
+
+function loadTeams(){
+home.innerHTML="";
+away.innerHTML="";
+let teams=db[league.value];
+
+for(let t in teams){
+home.innerHTML+=`<option>${t}</option>`;
+away.innerHTML+=`<option>${t}</option>`;
+}
+}
+
+// ================= POISSON =================
+
+function randomPoisson(lambda){
+let L=Math.exp(-lambda);
+let k=0,p=1;
+do{
+k++;
+p*=Math.random();
+}while(p>L);
+return k-1;
+}
+
+// ================= CALC =================
+
+function calc(){
+
+let teams=db[league.value];
+let h=teams?.[home.value];
+let a=teams?.[away.value];
+
+if(!h || !a){
+out.innerHTML="⚠ Manglende data";
+return;
+}
+
+if(home.value===away.value){
+out.innerHTML="⚠ Vælg to forskellige hold";
+return;
+}
+
+let expH,expA;
+
+// ===== hjemme/ude model =====
+let useHomeAway =
+h.home && h.total &&
+a.away && a.total;
+
+if(useHomeAway){
+
+expH=((h.home.a+a.away.d)+(h.total.a+a.total.d))/4;
+expA=((a.away.a+h.home.d)+(a.total.a+h.total.d))/4;
+
+}else{
+
+let ha=h.a??h.total?.a??1;
+let hd=h.d??h.total?.d??1;
+let aa=a.a??a.total?.a??1;
+let ad=a.d??a.total?.d??1;
+
+expH=(ha+ad)/2;
+expA=(aa+hd)/2;
+}
+
+expH=Math.max(0.1,expH);
+expA=Math.max(0.1,expA);
+
+// ===== Monte Carlo =====
+const sims=100000;
+
+let hw=0,d=0,aw=0;
+let over15=0,over25=0,over35=0,over45=0,btts=0;
+let scores={};
+
+for(let i=0;i<sims;i++){
+
+let hg=randomPoisson(expH);
+let ag=randomPoisson(expA);
+
+if(hg>ag) hw++;
+else if(hg===ag) d++;
+else aw++;
+
+let total=hg+ag;
+
+if(total>1) over15++;
+if(total>2) over25++;
+if(total>3) over35++;
+if(total>4) over45++;
+
+if(hg&&ag) btts++;
+
+let key=hg+"-"+ag;
+scores[key]=(scores[key]||0)+1;
+}
+
+hw/=sims;
+d/=sims;
+aw/=sims;
+over15/=sims;
+over25/=sims;
+over35/=sims;
+over45/=sims;
+btts/=sims;
+
+// ===== market checker til kombi =====
+
+function marketHit(name,hg,ag){
+
+let total = hg+ag;
+
+switch(name){
+
+case "Hjemmesejr": return hg>ag;
+case "Uafgjort": return hg===ag;
+case "Ude sejr": return ag>hg;
+
+case "1X": return hg>=ag;
+case "X2": return ag>=hg;
+case "12": return hg!==ag;
+
+case "Over 1.5": return total>1;
+case "Over 2.5": return total>2;
+case "Over 3.5": return total>3;
+case "Over 4.5": return total>4;
+
+case "Under 2.5": return total<3;
+case "Under 3.5": return total<4;
+case "Under 4.5": return total<5;
+
+case "BTTS": return hg>0 && ag>0;
+}
+
+return false;
+}
+
+let under25=1-over25;
+let under35=1-over35;
+let under45=1-over45;
+
+let dc1x=hw+d;
+let dcx2=aw+d;
+let dc12=hw+aw;
+
+// ===== score =====
+let bestScore="0-0",max=0;
+
+for(let s in scores){
+if(scores[s]>max){
+max=scores[s];
+bestScore=s;
+}
+}
+
+let scoreProb=(max/sims*100).toFixed(1);
+
+// ===== heatmap =====
+let heatHTML="<br><b>Score heatmap:</b><br><table>";
+
+for(let hg=0;hg<=5;hg++){
+heatHTML+="<tr>";
+for(let ag=0;ag<=5;ag++){
+
+let p=(scores[hg+"-"+ag]||0)/sims;
+
+let color="#eee";
+if(p>0.08) color="#4caf50";
+else if(p>0.04) color="#ffc107";
+else if(p>0.02) color="#ff9800";
+
+heatHTML+=`<td style="width:36px;height:36px;text-align:center;background:${color};border:1px solid #999;font-size:12px">
+${hg}-${ag}<br>${(p*100).toFixed(0)}%</td>`;
+}
+heatHTML+="</tr>";
+}
+heatHTML+="</table>";
+
+// ===== markets =====
+let markets=[
+
+{p:hw,name:"Hjemmesejr",type:"main"},
+{p:d,name:"Uafgjort",type:"main"},
+{p:aw,name:"Ude sejr",type:"main"},
+
+{p:over15,name:"Over 1.5",type:"main"},
+{p:over25,name:"Over 2.5",type:"main"},
+{p:over35,name:"Over 3.5",type:"main"},
+{p:over45,name:"Over 4.5",type:"main"},
+
+{p:under25,name:"Under 2.5",type:"main"},
+{p:under35,name:"Under 3.5",type:"main"},
+{p:under45,name:"Under 4.5",type:"main"},
+
+{p:btts,name:"BTTS",type:"main"},
+
+{p:dc1x,name:"1X",type:"dc"},
+{p:dcx2,name:"X2",type:"dc"},
+{p:dc12,name:"12",type:"dc"}
+
+].sort((a,b)=>b.p-a.p);
+
+let mains=markets.filter(m=>m.type==="main");
+
+// ===== smart filter =====
+
+let filtered = mains.filter(m=>{
+
+// hård blok mod ultra-safe spil
+if(m.name==="Under 4.5" && under45 < 0.93) return false;
+
+// over filtre
+if(m.name==="Over 1.5" && over15 < 0.85) return false;
+if(m.name==="Over 2.5" && over25 < 0.52) return false;
+if(m.name==="Over 3.5" && over35 < 0.35) return false;
+
+// under filtre
+if(m.name==="Under 2.5" && under25 < 0.55) return false;
+if(m.name==="Under 3.5" && under35 < 0.65) return false;
+
+// BTTS skal også have tempo
+if(m.name==="BTTS" && (btts < 0.68 || over25 < 0.50)) return false;
+
+// undgå for lave sandsynligheder generelt
+if(m.p < 0.28) return false;
+
+return true;
+});
+
+if(!filtered.length) filtered=mains;
+
+// smartere prioritering — betting zone filter
+
+function zoneScore(p){
+
+// dræb ultra-safe spam
+if(p > 0.82) return -1;
+
+// minimum kvalitet
+if(p < 0.45) return -1;
+
+// peak omkring 60–70%
+return 1 - Math.abs(p - 0.65);
+
+}
+
+// behold kun markets i zonen
+let zoned = filtered.filter(m => zoneScore(m.p) > 0);
+
+let best;
+
+// hvis vi har gode zone picks → brug dem
+if(zoned.length){
+
+zoned.sort((a,b)=> zoneScore(b.p) - zoneScore(a.p));
+best = zoned[0];
+
+}else{
+
+// fallback = højeste sandsynlighed
+filtered.sort((a,b)=> b.p - a.p);
+best = filtered[0];
+
+
+
+}
+
+// ===== odds / EV =====
+
+// ===== SMART KOMBI MOTOR v3 =====
+
+let comboText = "";
+
+let bestSingleScore = zoneScore(best.p);
+let bestCombo = null;
+
+// kun stærke singles må kombineres
+let comboPool = markets.filter(m =>
+m.type === "main" &&
+m.p >= 0.55 &&
+zoneScore(m.p) > 0
+);
+
+function getLine(name){
+let m = name.match(/(\d\.\d)/);
+return m ? parseFloat(m[1]) : null;
+}
+
+function conflict(a,b){
+
+// Over vs Under = altid konflikt
+if(a.name.includes("Over") && b.name.includes("Under")) return true;
+if(a.name.includes("Under") && b.name.includes("Over")) return true;
+
+// nested totals konflikt (fx Under 4.5 + Under 3.5)
+let aLine = getLine(a.name);
+let bLine = getLine(b.name);
+
+if(aLine && bLine){
+
+let aUnder = a.name.includes("Under");
+let bUnder = b.name.includes("Under");
+let aOver = a.name.includes("Over");
+let bOver = b.name.includes("Over");
+
+if(aUnder && bUnder) return true;
+if(aOver && bOver) return true;
+}
+
+// BTTS konflikt med lave totals
+if(a.name==="BTTS" && b.name==="Under 2.5") return true;
+if(b.name==="BTTS" && a.name==="Under 2.5") return true;
+
+// BTTS + Over 1.5 overlap (forbudt kombi)
+if(a.name==="BTTS" && b.name==="Over 1.5") return true;
+if(b.name==="BTTS" && a.name==="Over 1.5") return true;
+
+return false;
+}
+
+for(let i=0;i<comboPool.length;i++){
+for(let j=i+1;j<comboPool.length;j++){
+
+let A = comboPool[i];
+let B = comboPool[j];
+
+if(conflict(A,B)) continue;
+
+// hurtig sanity check
+if(A.p * B.p < 0.25) continue;
+
+// realistisk kombi sandsynlighed
+
+let hits = 0;
+
+for(let s in scores){
+
+let [hg,ag] = s.split("-").map(Number);
+
+if(
+marketHit(A.name,hg,ag) &&
+marketHit(B.name,hg,ag)
+){
+hits += scores[s];
+}
+
+}
+
+let comboP = hits / sims;
+
+// minimum kvalitet
+if(comboP < 0.40) continue;
+
+let z = zoneScore(comboP);
+if(z <= 0) continue;
+
+let comboScore = z * 1.1;
+
+if(comboScore > bestSingleScore){
+
+if(!bestCombo || comboScore > bestCombo.score){
+
+bestCombo = {
+name: A.name + " + " + B.name,
+p: comboP,
+score: comboScore
+};
+
+}
+
+}
+
+}
+}
+
+if(bestCombo){
+
+comboText = `
+<br><b>🔥 Kombi bedre end single:</b><br>
+${bestCombo.name}<br>
+Sandsynlighed: ${(bestCombo.p*100).toFixed(1)}%<br>
+`;
+
+}
+
+let odds=Number(document.getElementById("odds").value)||0;
+
+let activePick = best;
+let activeProb = best.p;
+
+if(bestCombo){
+activePick = bestCombo;
+activeProb = bestCombo.p;
+}
+
+let ev=(odds)?(activeProb*odds-1):0;
+
+let verdict=ev>0?"✅ VALUE":"❌ DROP";
+let color=ev>0?"green":"red";
+
+// ===== risiko =====
+
+let risk="🔴 Høj";
+if(activeProb>0.65) risk="🟢 Lav";
+else if(activeProb>0.55) risk="🟡 Medium";
+
+// sorter efter rækkefølge
+
+// ===== tabel =====
+
+// ønsket rækkefølge
+const order = [
+"Hjemmesejr",
+"Uafgjort",
+"Ude sejr",
+"BTTS",
+"Over 1.5",
+"Over 2.5",
+"Over 3.5",
+"Over 4.5",
+"Under 2.5",
+"Under 3.5",
+"Under 4.5"
+];
+
+// sorter markets
+const sortedMarkets = order
+.map(name => mains.find(m => m.name === name))
+.filter(Boolean);
+
+// byg tabel
+let table = `<br><b>📊 Markets</b>
+<table style="width:100%;border-collapse:collapse">
+<tr><th>Market</th><th>%</th><th></th></tr>`;
+
+sortedMarkets.forEach(m=>{
+table += `<tr>
+<td>${m.name}</td>
+<td>${(m.p*100).toFixed(1)}%</td>
+
+<td>${m.name===activePick.name?"🤖":""}</td>
+
+</tr>`;
+});
+
+table += "</table>";
+
+// ===== output =====
+
+lastPick = activePick;
+
+out.innerHTML=`
+
+Forventede mål: ${expH.toFixed(2)} – ${expA.toFixed(2)}<br>
+Score: ${bestScore} (${scoreProb}%)<br><br>
+
+👉 Valgt spil: <b>${activePick.name}</b><br>
+Model: ${(activeProb*100).toFixed(1)}%<br>
+
+EV: ${ev.toFixed(2)}<br>
+Risiko: ${risk}<br>
+<span style="color:${color};font-weight:bold">${verdict}</span>
+
+${table}
+${comboText}
+${heatHTML}
+
+`;
+}
+
+
+// ===== TRACKING =====
+
+function saveBet(){
+
+if(!lastPick){
+alert("Beregn først et spil!");
+return;
+}
+
+let match = home.value + " vs " + away.value;
+let bet = lastPick.name;
+let odds = parseFloat(document.getElementById("odds").value) || 0;
+let stake = 100;
+
+let table = document.getElementById("log");
+
+// dublet check
+for(let i=1;i<table.rows.length;i++){
+let r = table.rows[i];
+if(r.cells[0].innerText===match && r.cells[1].innerText===bet){
+alert("Dette spil er allerede gemt!");
+return;
+}
+}
+
+// opret række
+let row = table.insertRow();
+
+row.insertCell(0).innerText = match;
+row.insertCell(1).innerText = bet;
+row.insertCell(2).innerText = odds || "-";
+row.insertCell(3).innerText = stake;
+row.insertCell(4).innerText = (lastPick.p*100).toFixed(1)+"%";
+
+// RESULTAT knapper
+let resultCell = row.insertCell(5);
+
+let winBtn = document.createElement("button");
+winBtn.innerText = "Win";
+
+let lossBtn = document.createElement("button");
+lossBtn.innerText = "Loss";
+
+resultCell.appendChild(winBtn);
+resultCell.appendChild(lossBtn);
+
+// profit celle
+let profitCell = row.insertCell(6);
+profitCell.innerText = "-";
+
+// win klik
+
+winBtn.onclick = ()=>{
+let profit = odds * stake - stake;
+profitCell.innerText = profit.toFixed(2);
+profitCell.style.color="green";
+updateTotals();
+};
+
+// loss klik
+
+lossBtn.onclick = ()=>{
+profitCell.innerText = (-stake).toFixed(2);
+profitCell.style.color="red";
+updateTotals();
+};
+
+// slet
+let del = row.insertCell(7);
+del.innerHTML="🗑";
+del.style.cursor="pointer";
+
+del.onclick=()=>{
+row.remove();
+updateTotals();
+};
+
+updateTotals();
+
+}
+
+// ===== CSV EXPORT =====
+
+function exportCSV(){
+
+let table = document.getElementById("log");
+let rows = table.rows;
+
+if(rows.length <= 1){
+alert("Ingen spil at exportere!");
+return;
+}
+
+let csv = [];
+
+for(let i=0;i<rows.length;i++){
+
+let cols = rows[i].cells;
+let rowData = [];
+
+for(let j=0;j<cols.length-1;j++){ // spring slet kolonne over
+rowData.push(cols[j].innerText);
+}
+
+csv.push(rowData.join(","));
+}
+
+// lav fil
+let blob = new Blob([csv.join("\n")], {type:"text/csv"});
+let url = URL.createObjectURL(blob);
+
+let a = document.createElement("a");
+a.href = url;
+a.download = "betting_tracking.csv";
+a.click();
+
+URL.revokeObjectURL(url);
+
+alert("CSV exporteret!");
+}
+
+// ===== TOTAL TRACKING =====
+
+function updateTotals(){
+
+let table = document.getElementById("log");
+
+let totalStake = 0;
+let totalProfit = 0;
+
+for(let i=1;i<table.rows.length;i++){
+
+let row = table.rows[i];
+
+let stake = parseFloat(row.cells[3].innerText) || 0;
+let profit = parseFloat(row.cells[6].innerText) || 0;
+
+totalStake += stake;
+totalProfit += profit;
+
+}
+
+document.getElementById("totals").innerHTML =
+"Total indsats: " + totalStake.toFixed(2) + " KR<br>" +
+"Total profit: " + totalProfit.toFixed(2) + " KR";
+
+}
+
+// ===== INIT =====
+
+let league, home, away, out;
+
+window.onload = () => {
+
+    league = document.getElementById("league");
+    home = document.getElementById("home");
+    away = document.getElementById("away");
+    out = document.getElementById("out");
+
+    loadLeagues();
+    loadTeams();
+
+};
+
+</script>
+</body>
+</html>
